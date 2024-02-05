@@ -9,19 +9,28 @@ import numpy as np
 
 from astropy.time import Time, TimeDelta
 
-programs = ['GS-2021B-LP-204','GS-2022A-LP-204']
-cookie_file = '/home/ckilpatrick/scripts/gemini.cookie'
-outdir = '/data2/Gemini/rawdata'
-clobber = False
+def add_options(parser=None, usage=None):
+    import argparse
+    if parser == None:
+        parser = argparse.ArgumentParser(usage=usage,conflict_handler='resolve')
 
-archive_url='https://archive.gemini.edu/'
+    # Basic arguments and options
+    parser.add_argument('progids', type=str,
+        help='Comma-separated list of program IDs.')
+    parser.add_argument('--cookie-file','-cf', type=str, default=None,
+        help='Path to cookie file for downloading from Gemini archive.')
+    parser.add_argument('--clobber', default=False, action='store_true',
+        help='Clobber files that already exist in output path instead of '+\
+        'downloading them again.')
+    parser.add_argument('--outdir', type=str, default='.',
+        help='Output data to input directory.  Default is current directory.')
 
-# Color strings for download messages
-green = '\033[1;32;40m'
-red = '\033[1;31;40m'
-end = '\033[0;0m'
+    options = parser.parse_args()
 
-def get_observation_data(progid, feature='jsonsummary', cookie=None):
+    return(options)
+
+def get_observation_data(progid, archive_url='https://archive.gemini.edu/',
+    feature='jsonsummary', cookie=None):
     if cookie:
         r = requests.get(archive_url+feature+'/'+progid, cookies=cookie)
     else:
@@ -33,11 +42,14 @@ def get_observation_data(progid, feature='jsonsummary', cookie=None):
         return([])
 
 def load_cookie(cfile):
+    if not os.path.exists(cfile):
+        return(None)
+
     with open(cfile, 'r') as f:
         cookie = f.readline().replace('\n','')
         return(dict(gemini_archive_session=cookie))
 
-def get_full_outname(fileobj, makedirs=True, forcedir=''):
+def get_full_outname(fileobj, makedirs=True, forcedir='', outdir=''):
     t = Time(fileobj['ut_datetime'])
     basedir = outdir + '/' + t.datetime.strftime('ut%y%m%d/')
     if forcedir:
@@ -72,7 +84,8 @@ def mask_object_spectral_observation(data):
     return(newlist)
 
 # Query gemini archive for calibration files associated with the input fileobj
-def get_associated_cals(fileobj, cookie=None, delta_days=[0.0,0.0],
+def get_associated_cals(fileobj, archive_url='https://archive.gemini.edu/',
+    cookie=None, delta_days=[0.0,0.0],
     cal_types=['BIAS','FLAT','ARC']):
     # get date of observation
     if ('ut_datetime' not in fileobj.keys() or
@@ -148,7 +161,13 @@ def unpack_tarfile(outtarname):
         # Clean up tar file
         os.remove(outtarname)
 
-def download_file(fileobj, outfilename, cookie=None, symlink=''):
+def download_file(fileobj, outfilename, archive_url='https://archive.gemini.edu/',
+    cookie=None, symlink=''):
+
+    # Color strings for download messages
+    green = '\033[1;32;40m'
+    red = '\033[1;31;40m'
+    end = '\033[0;0m'
 
     feature = 'download'
     url = archive_url+feature+'/Filename/'
@@ -207,60 +226,70 @@ def download_file(fileobj, outfilename, cookie=None, symlink=''):
     sys.stdout.write(message)
     return(False)
 
-cookie = load_cookie(cookie_file)
+if __name__=="_main__":
 
-for progid in programs:
-    data = get_observation_data(progid, cookie=cookie)
-    data = mask_object_spectral_observation(data)
-    for fileobj in data:
-        fullfilename = get_full_outname(fileobj)
-        if os.path.exists(fullfilename) and not clobber:
-            print(f'WARNING: {fullfilename} exists.  Continuing...')
-            continue
-        basedir = os.path.split(fullfilename)[0].replace('science','')
-        symlinkname = fullfilename.replace('rawdata/','workspace/')
-        symlinkname = symlinkname.replace('science/','')
-        check = download_file(fileobj, fullfilename, cookie=cookie,
-            symlink=symlinkname)
+    usage='download_gemini_data.py progids'
+    options = add_options(usage=usage)
+    programs = options.progids.split(',')
+    cookie = load_cookie(options.cookie_file)
 
-        print('Checking for cals...')
-        cals = get_associated_cals(fileobj, cookie=cookie)
-        nbias = len([c for c in cals if c['observation_type']=='BIAS'])
-        nflat = len([c for c in cals if c['observation_type']=='FLAT'])
-        narcs = len([c for c in cals if c['observation_type']=='ARC'])
-        delta_days = 1
-        # Search for bias and flat 1 day in the future
-        cal_types = []
-        if nbias < 5: cal_types.append('BIAS')
-        if nflat < 5: cal_types.append('FLAT')
-        if narcs < 1: cal_types.append('ARC')
-        if cal_types:
-            print('Checking for additional cals...')
-            add_cals = get_associated_cals(fileobj, cookie=cookie,
-                delta_days=[-4,4], cal_types=cal_types)
-            cals.extend(add_cals)
+    clobber = options.clobber
+    outdir = options.outdir
 
-        # Get unique cals
-        names = []
-        modcals = []
-        for c in cals:
-            if c['name'] not in names:
-                modcals.append(c) ; names.append(c['name'])
-        cals = copy.copy(modcals)
 
-        ncals = len(cals)
-        nbias = len([c for c in cals if c['observation_type']=='BIAS'])
-        nflat = len([c for c in cals if c['observation_type']=='FLAT'])
-        narcs = len([c for c in cals if c['observation_type']=='ARC'])
-
-        m = f'Grabbing {ncals} calibration frames: '
-        m += f'{nbias} bias, {nflat} flats, {narcs} arcs'
-        print(m)
-
-        for cal in cals:
-            fullfilename = get_full_outname(cal, forcedir=basedir)
+    for progid in programs:
+        data = get_observation_data(progid, cookie=cookie)
+        data = mask_object_spectral_observation(data)
+        for fileobj in data:
+            fullfilename = get_full_outname(fileobj, outdir=outdir)
+            if os.path.exists(fullfilename) and not clobber:
+                print(f'WARNING: {fullfilename} exists.  Continuing...')
+                continue
+            basedir = os.path.split(fullfilename)[0].replace('science','')
             symlinkname = fullfilename.replace('rawdata/','workspace/')
-            symlinkname = symlinkname.replace('cals/','')
-            check = download_file(cal, fullfilename, cookie=cookie,
+            symlinkname = symlinkname.replace('science/','')
+            check = download_file(fileobj, fullfilename, cookie=cookie,
                 symlink=symlinkname)
+
+            print('Checking for cals...')
+            cals = get_associated_cals(fileobj, cookie=cookie)
+            nbias = len([c for c in cals if c['observation_type']=='BIAS'])
+            nflat = len([c for c in cals if c['observation_type']=='FLAT'])
+            narcs = len([c for c in cals if c['observation_type']=='ARC'])
+            delta_days = 1
+            # Search for bias and flat 1 day in the future
+            cal_types = []
+            if nbias < 5: cal_types.append('BIAS')
+            if nflat < 5: cal_types.append('FLAT')
+            if narcs < 1: cal_types.append('ARC')
+            if cal_types:
+                print('Checking for additional cals...')
+                add_cals = get_associated_cals(fileobj, cookie=cookie,
+                    delta_days=[-4,4], cal_types=cal_types)
+                cals.extend(add_cals)
+
+            # Get unique cals
+            names = []
+            modcals = []
+            for c in cals:
+                if c['name'] not in names:
+                    modcals.append(c) ; names.append(c['name'])
+            cals = copy.copy(modcals)
+
+            ncals = len(cals)
+            nbias = len([c for c in cals if c['observation_type']=='BIAS'])
+            nflat = len([c for c in cals if c['observation_type']=='FLAT'])
+            narcs = len([c for c in cals if c['observation_type']=='ARC'])
+
+            m = f'Grabbing {ncals} calibration frames: '
+            m += f'{nbias} bias, {nflat} flats, {narcs} arcs'
+            print(m)
+
+            for cal in cals:
+                fullfilename = get_full_outname(cal, forcedir=basedir,
+                    outdir=outdir)
+                symlinkname = fullfilename.replace('rawdata/','workspace/')
+                symlinkname = symlinkname.replace('cals/','')
+                check = download_file(cal, fullfilename, cookie=cookie,
+                    symlink=symlinkname)
 
