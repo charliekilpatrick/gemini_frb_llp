@@ -1,13 +1,17 @@
-Activate your pypeit environment and grab example data
+Activate your pypeit environment:
 
 ```
 conda activate pypeit
-wget 
-unzip 
-cd 
 ```
 
-pypeit setup procedures
+Download data from: `https://www.dropbox.com/scl/fi/llardlmbwdjbp4pg0ngfy/example_gemini_data.zip?rlkey=bc4dveo87ktuh2yprsqe7hcod&dl=0`.  Now unzip and enter the directory:
+
+```
+unzip example_gemini_data.zip
+cd example_gemini_data
+```
+
+First reduction step is to run `pypeit_setup`
 
 ```
 pypeit_setup -h
