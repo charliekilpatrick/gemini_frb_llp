@@ -31,10 +31,13 @@ def add_options(parser=None, usage=None):
 
 def get_observation_data(progid, archive_url='https://archive.gemini.edu/',
     feature='jsonsummary', cookie=None):
+
+    fullurl = os.path.join(archive_url, feature, progid)
     if cookie:
-        r = requests.get(archive_url+feature+'/'+progid, cookies=cookie)
+        r = requests.get(fullurl, cookies=cookie)
     else:
-        r = requests.get(archive_url+feature+'/'+progid)
+        r = requests.get(fullurl)
+
     if r.status_code==200:
         data = r.json()
         return(data)
@@ -107,7 +110,7 @@ def get_associated_cals(fileobj, archive_url='https://archive.gemini.edu/',
     for dd in np.arange(delta_days[0], delta_days[1]+1):
         t = Time(fileobj['ut_datetime']) + TimeDelta(dd, format='jd')
         date = t.datetime.strftime('%Y%m%d')
-        url = archive_url+feature+date
+        url = os.path.join(archive_url, feature, date)
         print(f'Checking {url}')
         r = requests.get(url, cookies=cookie)
 
@@ -170,12 +173,13 @@ def download_file(fileobj, outfilename, archive_url='https://archive.gemini.edu/
     end = '\033[0;0m'
 
     feature = 'download'
-    url = archive_url+feature+'/Filename/'
+    url = os.path.join(archive_url, feature, 'Filename')
     fileobj_name = fileobj['name'].replace('.fits','')
     fileobj_name = fileobj_name.replace('_bias','')
     if fileobj_name.startswith('g'):
         fileobj_name = fileobj_name[1:]
-    url = url + fileobj_name
+
+    url = os.path.join(url, fileobj_name)
 
     if os.path.exists(outfilename):
         print(f'{outfilename} already exists.  Skipping download.')
