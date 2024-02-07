@@ -8,6 +8,7 @@ import copy
 import numpy as np
 
 from astropy.time import Time, TimeDelta
+from astropy import units as u
 
 def add_options(parser=None, usage=None):
     import argparse
@@ -19,6 +20,9 @@ def add_options(parser=None, usage=None):
         help='Comma-separated list of program IDs.')
     parser.add_argument('--cookie-file','-cf', type=str, default=None,
         help='Path to cookie file for downloading from Gemini archive.')
+    parser.add_argument('--date', nargs='+', type=str, default=[],
+        help='Either a single date on which to download science data or a '+\
+        'range of dates for downloading science data.')
     parser.add_argument('--clobber', default=False, action='store_true',
         help='Clobber files that already exist in output path instead of '+\
         'downloading them again.')
@@ -74,13 +78,26 @@ def get_full_outname(fileobj, makedirs=True, forcedir='', outdir=''):
     return(fullfilename)
 
 # Mask the json filelist to only spectral/science/OBJECT observations
-def mask_object_spectral_observation(data):
+def mask_object_spectral_observation(data, date=[]):
     newlist = []
     for fileobj in data:
         if 'mode' not in fileobj.keys(): continue
         if 'observation_type' not in fileobj.keys(): continue
         mode = fileobj['mode'].lower()
         obstype = fileobj['observation_type'].lower()
+        obsdate = Time(fileobj['ut_datetime'])
+
+        # Check range of input dates
+        if date:
+            if len(date)==1:
+                t0 = Time(date[0])
+                t1 = t0 + TimeDelta(86400.0 * u.s)
+            elif len(date)==2:
+                t0 = Time(date[0])
+                t1 = Time(date[1])
+            if obsdate < t0 or obsdate > t1:
+                continue
+
         if ((mode=='spectroscopy' or mode=='ls') and (obstype=='object')):
             newlist.append(fileobj)
 
@@ -88,8 +105,8 @@ def mask_object_spectral_observation(data):
 
 # Query gemini archive for calibration files associated with the input fileobj
 def get_associated_cals(fileobj, archive_url='https://archive.gemini.edu/',
-    cookie=None, delta_days=[0.0,0.0],
-    cal_types=['BIAS','FLAT','ARC']):
+    cookie=None, delta_days=[0.0,0.0], cal_types=['BIAS','FLAT','ARC'],
+    caljson={}):
     # get date of observation
     if ('ut_datetime' not in fileobj.keys() or
         'mode' not in fileobj.keys()):
@@ -110,41 +127,50 @@ def get_associated_cals(fileobj, archive_url='https://archive.gemini.edu/',
     for dd in np.arange(delta_days[0], delta_days[1]+1):
         t = Time(fileobj['ut_datetime']) + TimeDelta(dd, format='jd')
         date = t.datetime.strftime('%Y%m%d')
-        url = os.path.join(archive_url, feature, date)
-        print(f'Checking {url}')
-        r = requests.get(url, cookies=cookie)
 
-        if r.status_code==200:
-            data = r.json()
-            for dat in data:
-                # All calibration frames must match these conditions
-                if not dat['camera']: continue
-                if dat['camera'].lower()!=camera: continue
-                if dat['detector_roi_setting'].lower()!=roi: continue
-                if dat['detector_binning'].lower()!=binning: continue
+        data = []
+        if date in caljson.keys():
+            data = caljson[date]
+        else:
+            url = os.path.join(archive_url, feature, date)
+            print(f'Checking {url}')
+            r = requests.get(url, cookies=cookie)
 
-                # Get bias frames
-                if dat['observation_type']=='BIAS' and 'BIAS' in cal_types:
-                    cals.append(dat)
-                    continue
+            if r.status_code==200:
+                data = r.json()
+                caljson[date]=data
+            else:
+                raise Exception(f'ERROR: could not get cal data from Gemini archive.')
 
-                # Spectrograph setup is important for FLAT, ARC, and standard
-                if dat['mode'].lower()!=mode: continue
-                if dat['focal_plane_mask'].lower()!=mask: continue
-                if dat['disperser'].lower()!=disperser: continue
-                if float(dat['central_wavelength'])!=cwave: continue
+        for dat in data:
+            # All calibration frames must match these conditions
+            if not dat['camera']: continue
+            if dat['camera'].lower()!=camera: continue
+            if dat['detector_roi_setting'].lower()!=roi: continue
+            if dat['detector_binning'].lower()!=binning: continue
 
-                # Get flat frames
-                if dat['observation_type']=='FLAT' and 'FLAT' in cal_types:
-                    cals.append(dat)
-                    continue
+            # Get bias frames
+            if dat['observation_type']=='BIAS' and 'BIAS' in cal_types:
+                cals.append(dat)
+                continue
 
-                # Get arc frames
-                if dat['observation_type']=='ARC' and 'ARC' in cal_types:
-                    cals.append(dat)
-                    continue
+            # Spectrograph setup is important for FLAT, ARC, and standard
+            if dat['mode'].lower()!=mode: continue
+            if dat['focal_plane_mask'].lower()!=mask: continue
+            if dat['disperser'].lower()!=disperser: continue
+            if float(dat['central_wavelength'])!=cwave: continue
 
-    return(cals)
+            # Get flat frames
+            if dat['observation_type']=='FLAT' and 'FLAT' in cal_types:
+                cals.append(dat)
+                continue
+
+            # Get arc frames
+            if dat['observation_type']=='ARC' and 'ARC' in cal_types:
+                cals.append(dat)
+                continue
+
+    return(cals, caljson)
 
 def unpack_tarfile(outtarname):
         basedir = os.path.split(outtarname)[0]
@@ -230,7 +256,7 @@ def download_file(fileobj, outfilename, archive_url='https://archive.gemini.edu/
     sys.stdout.write(message)
     return(False)
 
-if __name__=="_main__":
+if __name__=="__main__":
 
     usage='download_gemini_data.py progids'
     options = add_options(usage=usage)
@@ -239,11 +265,19 @@ if __name__=="_main__":
 
     clobber = options.clobber
     outdir = options.outdir
+    dates = options.date
 
+    if len(dates)>2:
+        raise Exception(f'ERROR: dates should be 0, 1, or 2 arguments.  '+\
+            'See download_gemini_date.py -h.')
 
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
+
+    caljson = {}
     for progid in programs:
         data = get_observation_data(progid, cookie=cookie)
-        data = mask_object_spectral_observation(data)
+        data = mask_object_spectral_observation(data, date=dates)
         for fileobj in data:
             fullfilename = get_full_outname(fileobj, outdir=outdir)
             if os.path.exists(fullfilename) and not clobber:
@@ -256,7 +290,8 @@ if __name__=="_main__":
                 symlink=symlinkname)
 
             print('Checking for cals...')
-            cals = get_associated_cals(fileobj, cookie=cookie)
+            cals, caljson = get_associated_cals(fileobj, cookie=cookie,
+                caljson=caljson)
             nbias = len([c for c in cals if c['observation_type']=='BIAS'])
             nflat = len([c for c in cals if c['observation_type']=='FLAT'])
             narcs = len([c for c in cals if c['observation_type']=='ARC'])
@@ -268,7 +303,7 @@ if __name__=="_main__":
             if narcs < 1: cal_types.append('ARC')
             if cal_types:
                 print('Checking for additional cals...')
-                add_cals = get_associated_cals(fileobj, cookie=cookie,
+                add_cals, caljson = get_associated_cals(fileobj, cookie=cookie,
                     delta_days=[-4,4], cal_types=cal_types)
                 cals.extend(add_cals)
 
