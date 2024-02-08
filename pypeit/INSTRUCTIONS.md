@@ -64,7 +64,7 @@ pypeit_flux_setup Science --objmodel poly
 This should create the basic files pypeit will use to perform the last three steps.  Next, we need to create a sensitivity function for our data.  Since we want to use the IR algorithm for flux calibration (for spectra beyond 7000 angstroms), we need to pass a parameter file.  Run this command to generate it:
 
 ```
-echo "[sensfunc]\n\talgorithm = IR\n\t[[IR]]\n\t\ttelgridfile = TelFit_MaunaKea_3100_26100_R20000.fits" > hz44.flux"
+echo "[sensfunc]\n\talgorithm = IR\n\t[[IR]]\n\t\ttelgridfile = TelFit_MaunaKea_3100_26100_R20000.fits" > hz44.flux
 ```
 
 and then run the sensitivity function command:
